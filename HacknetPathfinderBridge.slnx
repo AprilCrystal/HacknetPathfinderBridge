@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="HacknetPathfinderBridge/Plugin/HacknetPathfinderBridge.Plugin.csproj" />
+  <Project Path="HacknetPathfinderBridge/Host/HacknetPathfinderBridge.Host.csproj" />
+  <Project Path="HacknetPathfinderBridge/Tests/HacknetPathfinderBridge.Tests.csproj" />
+  <Project Path="HacknetPathfinderBridge/RuntimeTests/HacknetPathfinderBridge.RuntimeTests.csproj" />
+  <Project Path="HacknetPathfinderBridge/TestScenario/HacknetPathfinderBridge.TestScenario.csproj" />
+</Solution>

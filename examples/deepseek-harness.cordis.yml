@@ -1,0 +1,12 @@
+# Merge as an optional --patch overlay. Replace both paths with your local build.
+- insert:
+    - id: mcp-hacknet
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: hacknet
+        transport: stdio
+        command: 'C:\Your\Repo\Output\HacknetPathfinderBridge\Host\HacknetPathfinderBridge.Host.exe'
+        args: []
+        cwd: 'C:\Your\Repo'
+        toolCallTimeoutMs: 30000
+        failOnStartupError: true

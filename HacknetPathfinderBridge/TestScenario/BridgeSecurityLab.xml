@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Computer id="hnpb_security_lab" name="Bridge Security Lab" ip="198.18.0.90" security="4" type="empty">
+  <ports>22,21,25,80</ports>
+  <portsForCrack val="4" />
+  <proxy time="0.5" />
+  <firewall level="2" solution="BRIDGETS" additionalTime="0.15" />
+  <trace time="90" />
+  <adminPass pass="BridgeLab-Admin-Only" />
+  <file path="home" name="proof.txt">BRIDGE_LAB_SUCCESS: four ports, firewall and proxy bypassed through normal gameplay.</file>
+</Computer>

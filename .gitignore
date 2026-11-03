@@ -1,0 +1,17 @@
+**/bin/
+**/obj/
+/Dependencies/
+/Output/
+.vs/
+.idea/
+*.user
+*.dll
+*.exe
+*.pdb
+*.rar
+*.zip
+*.log
+.env
+.env.*
+user.local.md
+*.local.json

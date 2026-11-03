@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "hacknet": {
+      "command": "C:\\Your\\Repo\\Output\\HacknetPathfinderBridge\\Host\\HacknetPathfinderBridge.Host.exe",
+      "args": []
+    }
+  }
+}

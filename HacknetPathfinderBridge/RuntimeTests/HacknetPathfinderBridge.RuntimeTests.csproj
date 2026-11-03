@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion><Nullable>enable</Nullable>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <PlatformTarget>x86</PlatformTarget>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Plugin\BridgeServer.cs" Link="BridgeServer.cs" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="0Harmony"><HintPath>..\..\Dependencies\0Harmony.dll</HintPath></Reference>
+    <Reference Include="BepInEx.Core"><HintPath>..\..\Dependencies\BepInEx.Core.dll</HintPath></Reference>
+    <Reference Include="BepInEx.Hacknet"><HintPath>..\..\Dependencies\BepInEx.Hacknet.dll</HintPath></Reference>
+    <Reference Include="Hacknet"><HintPath>..\..\Dependencies\HacknetPathfinder.exe</HintPath></Reference>
+    <Reference Include="FNA"><HintPath>..\..\Dependencies\FNA.dll</HintPath></Reference>
+    <Reference Include="Mono.Cecil"><HintPath>..\..\Dependencies\Mono.Cecil.dll</HintPath></Reference>
+    <Reference Include="MonoMod.Utils"><HintPath>..\..\Dependencies\MonoMod.Utils.dll</HintPath></Reference>
+    <Reference Include="MonoMod.RuntimeDetour"><HintPath>..\..\Dependencies\MonoMod.RuntimeDetour.dll</HintPath></Reference>
+    <ProjectReference Include="..\..\AuxiliaryMods\Freezer\Freeze.csproj" />
+    <ProjectReference Include="..\Plugin\HacknetPathfinderBridge.Plugin.csproj" />
+  </ItemGroup>
+</Project>
