@@ -32,6 +32,7 @@ public sealed class BridgePlugin : HacknetPlugin
             server = new BridgeServer(message => Log.LogWarning(message));
             Active = new GameBridge(server);
             HarmonyInstance.PatchAll(typeof(BridgePlugin).Assembly);
+            RamAdmission.PatchCustom(HarmonyInstance);
             server.Start();
             Log.LogInfo("Bridge ready: " + server.InstanceId + "; registry=" + server.RegistryDirectory);
             return true;

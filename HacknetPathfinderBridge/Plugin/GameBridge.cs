@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -34,6 +35,20 @@ internal sealed class GameBridge : IDisposable
     private OS? lastOs;
     private string epoch = System.Guid.NewGuid().ToString("N");
     private Pending? active;
+    private Pending? running;
+    private Stopwatch? runClock;
+    private int runMilliseconds, traceFloor;
+    private string? terminalContains;
+    private string[] runHistory = Array.Empty<string>();
+    private Computer? runTarget;
+    private bool waitForProxy;
+    private string? runCommand;
+    private string? ramWarning;
+    private static readonly FieldInfo HistoryField = AccessTools.Field(typeof(Terminal), "history");
+    private static string[] ReadHistory(OS os) =>
+        (HistoryField.GetValue(os.terminal) as List<string>)?.ToArray() ?? Array.Empty<string>();
+    private static float? TraceRemaining(OS os) => os.traceTracker == null ? null :
+        (float?)AccessTools.Field(os.traceTracker.GetType(), "timer")?.GetValue(os.traceTracker);
     private Pending? pauseAcknowledgement;
     private long pauseBodyCount;
     private long[] before = new long[6];
@@ -63,10 +78,13 @@ internal sealed class GameBridge : IDisposable
         {
             if (!ReferenceEquals(lastOs, OS.currentInstance))
             {
+                StopRun("sessionChanged");
+                ramWarning = null;
                 Cancel("Session changed; old operations and UI handles invalidated.");
                 lastOs = OS.currentInstance; epoch = System.Guid.NewGuid().ToString("N");
                 controls = Array.Empty<UiControl>(); uiEpoch = "";
             }
+            CheckRun();
             if (active != null)
             {
                 if (active.IsExpired) Cancel("Operation expired; budget cancelled and game held paused.");
@@ -95,36 +113,58 @@ internal sealed class GameBridge : IDisposable
                 catch (Exception e) { pending.Reply(error: e.Message); }
             }
         }
-        catch (Exception e) { RecordError("Control pump: " + e.Message); Cancel(e.Message); }
+        catch (Exception e) { RecordError("Control pump: " + e.Message); StopRun("error"); Cancel(e.Message); }
     }
 
     private void Execute(Pending pending)
     {
         var request = pending.Request; var args = request.Arguments;
+        if (running != null && request.Method != "status" && request.Method != "ui" && request.Method != "observe" && request.Method != "pause")
+            throw new InvalidOperationException("runUntil is active; observe or pause first.");
         if (active != null && request.Method != "status" && request.Method != "ui")
             throw new InvalidOperationException("Another operation is active.");
         switch (request.Method)
         {
             case "status": pending.Reply(Snapshot()); break;
             case "observe":
-                if (!args.TryGetValue("pause", out var pause) || Convert.ToBoolean(pause)) AcknowledgePauseAfterTick(pending);
+                if (!args.TryGetValue("pause", out var pause) || Convert.ToBoolean(pause)) { StopRun("requestedPause"); AcknowledgePauseAfterTick(pending); }
                 else pending.Reply(Snapshot());
                 break;
-            case "pause": AcknowledgePauseAfterTick(pending); break;
-            case "resume": RequireEpoch(request); PauseController.Resume(); pending.Reply(Snapshot()); break;
+            case "pause": StopRun("requestedPause"); AcknowledgePauseAfterTick(pending); break;
+            case "runUntil":
+                RequireEpoch(request); RequirePaused();
+                var runOs = RequireOs();
+                runMilliseconds = Number(args, "milliseconds", 3000);
+                traceFloor = Number(args, "traceFloorSeconds", 8);
+                if (runMilliseconds < 1 || runMilliseconds > 8000 || traceFloor < 1 || traceFloor > 300)
+                    throw new ArgumentException("Run duration must be 1..8000 ms and Trace floor 1..300 seconds.");
+                terminalContains = args.ContainsKey("terminalContains") ? Text(args, "terminalContains") : null;
+                if (terminalContains != null && (terminalContains.Length == 0 || terminalContains.Length > 256))
+                    throw new ArgumentException("terminalContains must contain 1..256 characters.");
+                waitForProxy = args.TryGetValue("untilProxyBypassed", out var proxy) && Convert.ToBoolean(proxy);
+                runTarget = runOs.connectedComp;
+                if (waitForProxy && runTarget == null) throw new InvalidOperationException("Connect to a target before waiting on its proxy.");
+                runCommand = args.ContainsKey("command") ? ValidateCommand(runOs, Text(args, "command")) : null;
+                if (runCommand != null && waitForProxy)
+                    throw new ArgumentException("Start the proxy overload before runUntil; don't combine it with a live command.");
+                runHistory = ReadHistory(runOs);
+                running = pending;
+                runClock = Stopwatch.StartNew();
+                PauseController.Resume();
+                CheckRun();
+                break;
+            case "resume":
+                RequireEpoch(request);
+                if (lastOs is OS resumeOs && RamAdmission.Used(resumeOs) > resumeOs.totalRam)
+                    throw new InvalidOperationException("RAM is over capacity. Close programs before resuming.");
+                PauseController.Resume(); pending.Reply(Snapshot()); break;
             case "advance":
                 RequireEpoch(request);
                 Begin(pending, Number(args, "updates", 1), Number(args, "draws", 0)); break;
             case "command":
                 RequireEpoch(request); RequirePaused();
                 var os = RequireOs();
-                string command = Text(args, "command");
-                if (command.Length == 0 || command.Length > 2048 || command.Contains("\n") || command.Contains("\r"))
-                    throw new ArgumentException("Command must be a single nonempty line of at most 2048 characters.");
-                if (os.terminal.preventingExecution) throw new InvalidOperationException("Terminal is preventing execution.");
-                os.terminal.currentLine = command;
-                // Existing game semantic dispatch: deliberately not keyboard emulation or OS.execute's worker thread.
-                os.terminal.NonThreadedInstantExecuteLine();
+                Dispatch(os, ValidateCommand(os, Text(args, "command")));
                 pending.Reply(new { DispatchCompleted = true, BusinessCompletion = "not asserted; spawned executables/actions may need advance", State = Snapshot() });
                 break;
             case "ui": pending.Reply(Ui()); break;
@@ -166,8 +206,81 @@ internal sealed class GameBridge : IDisposable
         PauseController.Pause(); pauseBodyCount = PauseController.Counters()[2]; pauseAcknowledgement = pending;
     }
 
+    private static string ValidateCommand(OS os, string command)
+    {
+        if (command.Length == 0 || command.Length > 2048 || command.Contains("\n") || command.Contains("\r"))
+            throw new ArgumentException("Command must be a single nonempty line of at most 2048 characters.");
+        if (os.terminal.preventingExecution) throw new InvalidOperationException("Terminal is preventing execution.");
+        return command;
+    }
+
+    private static void Dispatch(OS os, string command)
+    {
+        os.terminal.currentLine = command;
+        os.terminal.NonThreadedInstantExecuteLine();
+    }
+
+    private string[] NewTerminalLines(OS os)
+    {
+        var history = ReadHistory(os);
+        int common = 0;
+        while (common < history.Length && common < runHistory.Length && history[common] == runHistory[common]) common++;
+        return history.Skip(common).ToArray();
+    }
+
+    private void StopRun(string reason)
+    {
+        var pending = running;
+        if (pending == null) return;
+        running = null;
+        PauseController.Pause();
+        var lines = lastOs == null ? Array.Empty<string>() : NewTerminalLines(lastOs)
+            .Take(60).Select(line => line.Length > 4096 ? line.Substring(0, 4096) : line).ToArray();
+        pending.Reply(new { StopReason = reason, TerminalDelta = lines, State = Snapshot(), Ui = Ui() });
+        runHistory = Array.Empty<string>();
+        runTarget = null; runCommand = null;
+    }
+
+    private void CheckRun()
+    {
+        if (running == null) return;
+        var os = OS.currentInstance;
+        if (os == null || !ReferenceEquals(lastOs, os)) StopRun("sessionChanged");
+        else if (PauseController.IsPaused) StopRun("externalPause");
+        else if (RamAdmission.Used(os) > os.totalRam) StopRun("ramOverCapacity");
+        else if (os.traceTracker?.active == true && TraceRemaining(os) <= traceFloor) StopRun("traceFloor");
+        else if (!ReferenceEquals(os.connectedComp, runTarget)) StopRun("connectionChanged");
+        else if (waitForProxy && runTarget?.proxyActive == false) StopRun("proxyBypassed");
+        else if (terminalContains != null && NewTerminalLines(os).Any(line => line.IndexOf(terminalContains, StringComparison.OrdinalIgnoreCase) >= 0))
+            StopRun("terminalMatched");
+        else if (running.IsExpired || runClock!.ElapsedMilliseconds >= runMilliseconds) StopRun("timeBudget");
+    }
+
     public void AfterUpdate()
     {
+        try
+        {
+            if (OS.currentInstance is OS os && os.isLoaded)
+            {
+                long used = RamAdmission.Used(os);
+                ramWarning = used > os.totalRam ? $"RAM over capacity: {used}/{os.totalRam} MB." : null;
+                if (ramWarning != null)
+                {
+                    StopRun("ramOverCapacity");
+                    PauseController.Pause();
+                    Cancel(ramWarning);
+                }
+            }
+            CheckRun();
+            if (running != null && runCommand is string command && lastOs is OS liveOs)
+            {
+                runCommand = null;
+                Dispatch(liveOs, ValidateCommand(liveOs, command));
+                CheckRun();
+            }
+        }
+        catch (Exception e) { RecordError("Run monitor: " + e.Message); StopRun("error"); }
+
         var pending = pauseAcknowledgement;
         if (pending == null) return;
         pauseAcknowledgement = null;
@@ -194,6 +307,9 @@ internal sealed class GameBridge : IDisposable
             Terminal = os?.terminal == null ? null : new { CurrentLine = TextBox.MaskingText ? "<masked>" : os.terminal.currentLine,
                 os.terminal.prompt, os.terminal.preventingExecution, History = history?.Skip(Math.Max(0, history.Count - 60))
                     .Select(line => line.Length > 4096 ? line.Substring(0, 4096) + "<truncated>" : line).ToArray() ?? Array.Empty<string>() },
+            Ram = os == null ? null : new { TotalMb = os.totalRam, UsedMb = RamAdmission.Used(os),
+                AvailableMb = os.totalRam - RamAdmission.Used(os), Warning = ramWarning,
+                Processes = os.exes?.Select(exe => new { exe.PID, Name = exe.IdentifierName, Mb = exe.ramCost, exe.needsRemoval }).ToArray() },
             ConnectedNode = os?.connectedComp == null ? null : new { os.connectedComp.idName, os.connectedComp.ip },
             Trace = trace == null ? null : new { trace.active, RemainingSeconds = AccessTools.Field(trace.GetType(), "timer")?.GetValue(trace) },
             Nodes = os?.netMap?.nodes?.Take(300).Select(c => new { c.idName, c.ip, Daemons = c.daemons.Select(d => d.GetType().FullName).ToArray() }).ToArray(),
@@ -284,6 +400,7 @@ internal sealed class GameBridge : IDisposable
     public void Dispose()
     {
         RestoreInput();
+        StopRun("bridgeUnloaded");
         Cancel("Bridge unloaded. Game remains paused if it was controlled by the bridge.");
         pauseAcknowledgement?.Reply(error: "Bridge unloaded before pause acknowledgement."); pauseAcknowledgement = null;
     }

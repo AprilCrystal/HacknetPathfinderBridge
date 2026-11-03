@@ -22,3 +22,11 @@
 这些是 tools/call 的 params 示例，不是三个连在一起的 JSON 文档。消息外层由 MCP 客户端添加 JSON-RPC request id。
 
 成功进入游戏会改变 SessionEpoch，导致原先创建/继续游戏的 UI 操作报告会话变化。此时重新 state 验证 OSReady，不能立即重复点击创建。超时也同样不表示回滚。
+
+## Runtime safeguards
+
+`hnpb_state` now reports Ram (actual usage and process list). The game reconciles RAM before vanilla and Pathfinder executable admission; detected dynamic over-capacity pauses gameplay. Inspect game terminal output to distinguish Insufficient Memory from successful dispatch.
+
+`hnpb_control` action `runUntil` starts from paused state and runs continuously for `milliseconds` (1–8000). It freezes at the Trace floor (default 8 seconds), connection change, optional `untilProxyBypassed`, optional new `terminalContains` substring, RAM over-capacity or timeout. It returns StopReason, TerminalDelta, State and Ui. Optional `command` dispatches one short command after resuming; the command is synchronous, and the watchdog cannot preempt a blocking game call.
+
+DSH reported post-login menu activation issues. Native settings icon ID 3827179 was verified live: capture, activate, then capture yielded the settings menu. The icon has empty Text. A successful activation still needs verification against the resulting UI. Self-drawn controls still require adapters.
